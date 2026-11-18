@@ -47,7 +47,7 @@ npx http-server -p 8080
 部署到 GitHub Pages 后，直接用手机浏览器打开：
 
 ```
-https://<你的用户名>.github.io/<仓库名>/
+https://xuyueling97-ctrl.github.io/big-fat-fish-deep-sea/
 ```
 
 ---
@@ -189,7 +189,7 @@ node tests/diag-touch.js  # 触摸能力诊断（排查触屏 UI 不出现的问
    - **不要上传**：`.codely-cli/`、`tests/out/`（私有文件与测试产物）
 3. 提交后进入 **Settings → Pages**
 4. **Source** 选择 `Deploy from a branch`，分支选 `main`，目录选 `/ (root)`，保存
-5. 等待约 1 分钟，访问 `https://<用户名>.github.io/big-fat-fish-deep-sea/`
+5. 等待约 1 分钟，访问 `https://xuyueling97-ctrl.github.io/big-fat-fish-deep-sea/`
 
 > 所有资源引用都是相对路径，部署在 `/<仓库名>/` 子路径下无需任何修改。
 
@@ -200,7 +200,7 @@ git init
 git add .
 git commit -m "feat: 大肥鱼 · 深海吞食"
 git branch -M main
-git remote add origin https://github.com/<用户名>/big-fat-fish-deep-sea.git
+git remote add origin https://github.com/xuyueling97-ctrl/big-fat-fish-deep-sea.git
 git push -u origin main
 ```
 
