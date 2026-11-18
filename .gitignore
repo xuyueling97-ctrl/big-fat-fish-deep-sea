@@ -1,0 +1,23 @@
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 测试产物：截图、无头浏览器临时配置目录（每次跑测试都会重建）
+tests/out/
+
+# 无头浏览器残留配置（如果测试异常中断没有清理）
+browser-profile-*
+tests/browser-profile-*
+
+# 本地备份 / 临时目录
+*-backup-*/
+*.bak
+*.tmp
+
+# Codely CLI 私有数据：包含本地记忆、会话存档，不应进入开源仓库
+.codely-cli/
+
+# 依赖（本项目零依赖，这里只是防止误提交）
+node_modules/
