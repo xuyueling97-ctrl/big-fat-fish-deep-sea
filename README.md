@@ -107,6 +107,13 @@ https://xuyueling97-ctrl.github.io/big-fat-fish-deep-sea/
 
 当致命掠食者靠近，屏幕边缘泛起红色警戒光晕，越近越强。这是留给你按下冲刺的最后提示。
 
+威胁永远是可读、可躲的，不会被围死：
+
+- **大鱼有配额**：比你大的鱼最多占鱼群的 30%，不会随着游玩时长越积越多
+- **追兵有限**：同一时刻只有最近的 2 条大鱼会主动追击，其余保持漫游，总有一条逃生缝隙
+- **跑得掉**：掠食者的速度上限被限制在玩家基础速度的 1.06 倍，靠操作可以甩开
+- **受伤冲击波**：被撞时会震开周围 240px 内的大鱼，给无敌时间结束后的脱离窗口
+
 ### 彩蛋 🥚
 
 在开始界面**连续点击标题「大肥鱼」7 下**（触屏与鼠标都可以），会解锁一个彩蛋：
@@ -153,6 +160,8 @@ https://xuyueling97-ctrl.github.io/big-fat-fish-deep-sea/
 ├── docs/screenshots/       README 配图
 └── tests/                  无头浏览器自动化测试
     ├── smoke.js            冒烟测试：加载、异常、状态机链路、PC/触屏 UI 分支
+    ├── world-math.js       世界/相机数学自检 + 大后期围攻压力回归（纯 Node，不需要浏览器）
+    ├── late-pressure.js    大后期围攻压力：满级体型 + 6000 分的 A/B 对比
     ├── mobile.js           移动端兼容性：6 设备视口、真实触摸拖拽、横竖屏、后台暂停
     ├── curve.js            成长曲线采样（调数值后必跑）
     ├── stability.js        多分辨率 + 8 分钟压力 + 泄漏检查
@@ -176,7 +185,9 @@ https://xuyueling97-ctrl.github.io/big-fat-fish-deep-sea/
 需要 **Node 18+**（用到全局 `WebSocket`）和 **Microsoft Edge**（脚本里写死了默认安装路径 `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`，其他浏览器需自行改路径）。测试脚本会自行启动无头浏览器、起临时静态服务，无需手动准备。
 
 ```powershell
+node tests/world-math.js  # 世界/相机数学自检 + 大后期围攻压力回归（纯 Node，最快）
 node tests/smoke.js       # 冒烟：全链路 + PC/触屏 UI 分支是否正确
+node tests/late-pressure.js # 大后期围攻压力 A/B（满级 + 6000 分，各跑 5 轮）
 node tests/mobile.js      # 移动端：6 设备视口 + 真实触摸拖拽 + 横竖屏 + 后台暂停
 node tests/curve.js       # 成长曲线：一局时长与得分曲线是否合理
 node tests/stability.js   # 稳定性：多分辨率 + 长时压力

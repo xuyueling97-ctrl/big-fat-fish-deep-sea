@@ -7,6 +7,24 @@ class BigFatFish {
   // 地图按「屏」计：3x3 屏的世界，探索感足够又不至于找不到鱼
   static get WORLD_SCREENS() { return 3; }
 
+  // 同时全速追击玩家的掠食者上限，避免后期被多条大鱼无解围死
+  static get MAX_CHASERS() { return 2; }
+
+  // 掠食者速度上限（相对玩家基础速度）。略高于 1 才有压迫感，
+  // 但必须留出被甩开的可能，否则玩家没有操作空间。
+  static get PREDATOR_SPEED_CAP() { return 1.06; }
+
+  // 致命鱼在鱼群里的占比上限。玩家永远吃不到它们，不设配额的话
+  // 每吃掉一条小鱼都会按同样的概率补进一条大鱼，占比会一路涨到一半以上，
+  // 大后期就变成"整片海都是比你大的鱼"，被围攻时无路可走。
+  static get LETHAL_RATIO() { return 0.3; }
+
+  // 受伤时把周围大鱼震开的半径，给玩家留出脱离包围的窗口
+  static get HURT_PUSH_RADIUS() { return 240; }
+
+  // 冲击波在最内圈把大鱼推开的距离（按距离线性衰减到 0）
+  static get HURT_PUSH_DIST() { return 170; }
+
   static get STAGES() {
     return [
       { at: 0.00, name: '鱼苗' },
@@ -209,6 +227,7 @@ class BigFatFish {
       wobSpeed: 7,
       mouth: 0,
       speedRatio: 0,
+      baseSpeed: 306,
       dashCd: 0,
       dashTime: 0,
       invincible: 0,
@@ -312,9 +331,26 @@ class BigFatFish {
     return BigFatFish.STAGES[this.stageIndex()].name;
   }
 
+  /* 场上致命鱼（比玩家大、撞到会掉命）的条数 */
+  lethalCount() {
+    const p = this.player;
+    if (!p) return 0;
+    let n = 0;
+    for (const e of this.enemies) if (!e.dead && e.r >= p.r * 1.18) n++;
+    return n;
+  }
+
+  /* 致命鱼配额：按鱼群目标数量的比例给一个硬上限 */
+  lethalCap() {
+    return Math.max(3, Math.round(this.enemyTargetCount() * BigFatFish.LETHAL_RATIO));
+  }
+
   spawnEnemy(anywhere, forceEdible) {
     const p = this.player;
     const baseR = p ? p.r : BigFatFish.START_R;
+    // 致命鱼已经满额时，新刷的一律是可吃的鱼。
+    // 玩家永远吃不掉大鱼，所以这里必须挡一道，否则大鱼会越积越多。
+    const lethalFull = !forceEdible && this.lethalCount() >= this.lethalCap();
     const roll = Math.random();
     // 开局少一些"巨物"，随游戏进程逐步提高压迫感
     const ramp = Utils.clamp(this.elapsed / 75, 0, 1);
@@ -322,6 +358,8 @@ class BigFatFish {
     let frac;
     if (forceEdible) {
       frac = Utils.rand(0.34, 0.86);
+    } else if (lethalFull) {
+      frac = Utils.rand(0.34, 0.98);
     } else if (roll < 0.52) {
       frac = Utils.rand(0.34, 0.92);
     } else if (roll < 0.80) {
@@ -645,6 +683,8 @@ class BigFatFish {
     // 体型越大越笨重：成长带来的代价
     const growN = Utils.clamp((p.r - BigFatFish.START_R) / (BigFatFish.MAX_R - BigFatFish.START_R), 0, 1);
     const baseSpeed = 306 * (1 - growN * 0.22);
+    // 掠食者的速度上限要以此为准，不能让大鱼跑得比玩家还快
+    p.baseSpeed = baseSpeed;
 
     p.dashCd = Math.max(0, p.dashCd - dt);
     p.dashTime = Math.max(0, p.dashTime - dt);
@@ -698,9 +738,36 @@ class BigFatFish {
     else if (e.y > this.worldH + m) e.y -= H;
   }
 
+  /* 挑出可以全速追击的掠食者：只取离玩家最近的几条（见 MAX_CHASERS）。
+     其余掠食者仍会靠近，但速度被压低，围上来时才有缝可钻。 */
+  pickActiveChasers() {
+    const p = this.player;
+    const set = new Set();
+    if (!p || !p.alive) return set;
+
+    const list = [];
+    for (const e of this.enemies) {
+      if (e.dead || e.golden) continue;
+      if (e.r < p.r * 1.18) continue; // 撞不死的鱼不占追击名额
+      const d = this.ringDist(e.x, e.y, p.x, p.y);
+      if (d > 380) continue;
+      list.push({ e, d });
+    }
+    if (list.length > BigFatFish.MAX_CHASERS) {
+      list.sort((a, b) => a.d - b.d);
+      list.length = BigFatFish.MAX_CHASERS;
+    }
+    for (const it of list) set.add(it.e);
+    return set;
+  }
+
   updateEnemies(dt, running) {
     const p = this.player;
     let threat = 0;
+
+    // 大后期一次涌上来七八条掠食者会形成无解的合围：玩家往哪躲都会撞上另一条。
+    // 所以只让最近的两条真正全速追击，其余的减速逼近，给玩家留出一条可读的缝。
+    const chasers = this.pickActiveChasers();
 
     for (const e of this.enemies) {
       e.age += dt;
@@ -749,8 +816,10 @@ class BigFatFish {
             e.vx += (dx / d) * pull * dt;
             e.vy += (dy / d) * pull * dt;
           }
-        } else if (d < 380) {
-          // 掠食者：追击体型较小的玩家
+        } else if (d < 380 && chasers.has(e)) {
+          // 掠食者：只有被选中的那几条主动追击玩家。
+          // 如果所有大鱼都追过来，它们会从四面八方聚成一团把玩家围死；
+          // 让其余大鱼保持漫游，玩家面对的才始终是 1~2 条可读、可操作的威胁。
           const chase = 1 - d / 380;
           const power = e.r > p.r * 1.55 ? 92 : 132;
           ax += (dx / d) * power * chase;
@@ -769,7 +838,13 @@ class BigFatFish {
       ay += Math.sin(e.wander) * e.speed * 0.55;
 
       const diff = 1 + Math.min(this.elapsed, 180) / 180 * 0.42;
-      const maxSp = e.speed * 1.9 * diff;
+      let maxSp = e.speed * 1.9 * diff;
+      if (p && p.alive && p.baseSpeed && e.r >= p.r * 1.18) {
+        // 硬上限：掠食者最多比玩家基础速度略快一点。
+        // 没有这条约束时，大后期大鱼能跑到玩家上限的 1.4 倍，
+        // 玩家在物理上无法逃跑，只能靠冲刺续命——也就是"被围攻必死"。
+        maxSp = Math.min(maxSp, p.baseSpeed * BigFatFish.PREDATOR_SPEED_CAP);
+      }
       e.vx += ax * dt;
       e.vy += ay * dt;
 
@@ -994,6 +1069,27 @@ class BigFatFish {
     this.burst(p.x, p.y, 18, 6, 1.2);
     this.floater(p.x, p.y - p.r - 18, '-1', '#ff8f9c', 20);
     Sfx.hurt();
+
+    // 冲击波：把身边的大鱼直接震开一段距离，给玩家一个脱离包围的窗口。
+    // 这里改坐标而不是改速度——速度会被 maxSp 钳制掉，推不动。
+    // 没有这一下，1.5 秒无敌刚结束就会被同一群鱼再次撞上，
+    // 连续掉光三条命，这才是"被围攻致死"的体感来源。
+    for (const o of this.enemies) {
+      if (o.dead || o === e) continue;
+      if (o.r < p.r * 1.18) continue;
+      const odx = this.wrapDelta(o.x - p.x, this.worldW);
+      const ody = this.wrapDelta(o.y - p.y, this.worldH);
+      const od = Math.hypot(odx, ody);
+      if (od > BigFatFish.HURT_PUSH_RADIUS || od < 0.001) continue;
+      // 越近推得越远，刚好在半径边缘的几乎不动
+      const k = 1 - od / BigFatFish.HURT_PUSH_RADIUS;
+      const push = BigFatFish.HURT_PUSH_DIST * k;
+      o.x += (odx / od) * push;
+      o.y += (ody / od) * push;
+      o.vx = 0;
+      o.vy = 0;
+      this.wrap(o);
+    }
 
     if (this.lives <= 0) this.gameOver();
   }
