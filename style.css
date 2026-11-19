@@ -274,6 +274,65 @@ body.is-touch p.hint-desktop { display: none; }
 .dash-btn:active { transform: scale(0.93); }
 .dash-btn.is-empty { opacity: 0.5; }
 
+/* ---------- 方向摇杆（触屏，左下角） ---------- */
+.stick {
+  position: absolute;
+  left: max(18px, env(safe-area-inset-left));
+  bottom: calc(max(18px, env(safe-area-inset-bottom)) + 14px);
+  width: 136px;
+  height: 136px;
+  display: none;
+  z-index: 30;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+body.is-touch .stick { display: block; }
+body.is-touch .stick.is-hidden { display: none; }
+
+.stick__base {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 1.5px solid rgba(123, 200, 255, 0.34);
+  background: radial-gradient(circle at 42% 38%, rgba(28, 76, 96, 0.5), rgba(6, 24, 34, 0.62));
+  box-shadow: inset 0 0 26px rgba(90, 190, 220, 0.14), 0 6px 22px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(6px);
+}
+
+/* 底盘内的刻度环，给一点"这是个控件"的暗示 */
+.stick__ring {
+  position: absolute;
+  inset: 18%;
+  border-radius: 50%;
+  border: 1px dashed rgba(140, 220, 240, 0.26);
+  pointer-events: none;
+}
+
+.stick__knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(160, 240, 235, 0.72);
+  background: radial-gradient(circle at 38% 32%, rgba(160, 255, 245, 0.62), rgba(20, 92, 104, 0.85));
+  box-shadow: 0 0 18px rgba(110, 235, 225, 0.4), inset 0 0 14px rgba(190, 255, 250, 0.3);
+  pointer-events: none;
+  transition: box-shadow 0.16s ease;
+  will-change: transform;
+}
+.stick.is-active .stick__knob {
+  box-shadow: 0 0 26px rgba(130, 255, 245, 0.62), inset 0 0 16px rgba(200, 255, 252, 0.4);
+}
+.stick.is-active .stick__base {
+  border-color: rgba(150, 235, 240, 0.55);
+}
+
 /* ---------- 全屏面板 ---------- */
 .screen {
   position: absolute;
@@ -568,6 +627,23 @@ body.is-touch .stat__value {
     height: 72px;
     font-size: 12px;
   }
+
+  /* 横屏高度紧张，摇杆同步收小，避免吃掉太多可视水域 */
+  .stick {
+    width: 112px;
+    height: 112px;
+    left: max(12px, env(safe-area-inset-left));
+    bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .stick__knob {
+    width: 46px;
+    height: 46px;
+    margin: -23px 0 0 -23px;
+  }
+
+  /* 摇杆占住左下角，成长面板必须让位，否则会互相遮挡 */
+  body.is-touch .hud__bottom { padding-left: 128px; }
 }
 
 /* 极窄屏（如 iPhone SE 竖屏）进一步收敛 */
@@ -592,4 +668,58 @@ body.is-touch .stat__value {
   .btn:hover { background: rgba(18, 52, 66, 0.86); }
   .btn--primary:hover { background: linear-gradient(180deg, #3fe0c0, #17ab98); }
   .link-btn:hover { background: rgba(120, 200, 220, 0.07); color: var(--ink-dim); }
+}
+
+/* ==================== 强制横屏（竖屏触屏） ==================== */
+/* 手机竖持时把整个舞台顺时针旋转 90°，玩家看到的仍是横屏画面。
+   由 main.js 依据「是否触屏 + 当前是否竖屏」切换 body.is-rotated。 */
+body.is-rotated {
+  overflow: hidden;
+  background: #031019;
+}
+
+body.is-rotated #app {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vh;
+  height: 100vw;
+  transform: rotate(90deg) translateY(-100%);
+  transform-origin: top left;
+  overflow: hidden;
+}
+
+/* 旋转后舞台的逻辑尺寸是「宽 = 100vh、高 = 100vw」，
+   但媒体查询仍按物理视口（竖屏）求值，横屏矮屏那套规则不会命中。
+   这里按旋转后的实际尺寸补一遍，否则摇杆会退回 136px 并压住成长面板。 */
+body.is-rotated .meter {
+  width: min(42vh, 250px);
+  padding: 7px 10px 8px;
+}
+
+body.is-rotated .hud__bottom { padding-left: 128px; }
+
+body.is-rotated .stick {
+  width: 112px;
+  height: 112px;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(12px, env(safe-area-inset-bottom));
+}
+
+body.is-rotated .stick__knob {
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+}
+
+body.is-rotated .dash-btn {
+  right: max(14px, env(safe-area-inset-right));
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 6px);
+}
+
+body.is-rotated .dash-btn,
+body.is-rotated.is-touch .dash-btn {
+  width: 72px;
+  height: 72px;
+  font-size: 12px;
 }

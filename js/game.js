@@ -4,6 +4,9 @@ class BigFatFish {
   static get START_R() { return 13; }
   static get MAX_R() { return 62; }
 
+  // 地图按「屏」计：3x3 屏的世界，探索感足够又不至于找不到鱼
+  static get WORLD_SCREENS() { return 3; }
+
   static get STAGES() {
     return [
       { at: 0.00, name: '鱼苗' },
@@ -26,6 +29,10 @@ class BigFatFish {
     this.h = 1;
     this.vw = 1;
     this.vh = 1;
+    // 世界比视口大：玩家在大地图里游，相机只跟随其中一块
+    this.worldW = 1;
+    this.worldH = 1;
+    this.cam = { x: 0, y: 0 };
 
     this.state = 'menu';
     this.t = 0;
@@ -45,6 +52,8 @@ class BigFatFish {
     this.keys = new Set();
     this.pointer = { x: 0, y: 0, active: false, mode: 'pointer' };
     this.drag = { active: false, ox: 0, oy: 0, dx: 0, dy: 0 };
+    // 摇杆：nx/ny 为归一化方向，mag 为力度 0..1
+    this.stick = { active: false, nx: 0, ny: 0, mag: 0 };
     this.isTouch = false;
 
     this.best = this.loadBest();
@@ -68,9 +77,13 @@ class BigFatFish {
   }
 
   resize() {
+    // 注意：旋转状态下 getBoundingClientRect() 返回的是轴对齐包围盒，宽高会颠倒，
+    // 所以这里必须用 offsetWidth/offsetHeight 取布局尺寸。
     const rect = this.canvas.getBoundingClientRect();
-    const w = Math.max(1, Math.round(rect.width || window.innerWidth));
-    const h = Math.max(1, Math.round(rect.height || window.innerHeight));
+    const layoutW = this.canvas.offsetWidth;
+    const layoutH = this.canvas.offsetHeight;
+    const w = Math.max(1, Math.round(layoutW || rect.width || window.innerWidth));
+    const h = Math.max(1, Math.round(layoutH || rect.height || window.innerHeight));
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const oldVw = this.vw;
     const oldVh = this.vh;
@@ -86,22 +99,88 @@ class BigFatFish {
     this.vw = w / this.S;
     this.vh = h / this.S;
 
-    // 按比例迁移已有实体的位置
-    if (oldVw > 1 && oldVh > 1 && (oldVw !== this.vw || oldVh !== this.vh)) {
-      const kx = this.vw / oldVw;
-      const ky = this.vh / oldVh;
+    const oldWorldW = this.worldW;
+    const oldWorldH = this.worldH;
+    this.worldW = this.vw * BigFatFish.WORLD_SCREENS;
+    this.worldH = this.vh * BigFatFish.WORLD_SCREENS;
+
+    // 按比例迁移已有实体的位置（含相机），避免改窗口大小后世界错位
+    if (oldWorldW > 1 && oldWorldH > 1 && (oldWorldW !== this.worldW || oldWorldH !== this.worldH)) {
+      const kx = this.worldW / oldWorldW;
+      const ky = this.worldH / oldWorldH;
       const all = [this.player, ...this.enemies, ...this.powerups].filter(Boolean);
       for (const e of all) { e.x *= kx; e.y *= ky; }
       for (const p of this.particles) { p.x *= kx; p.y *= ky; }
       for (const f of this.floaters) { f.x *= kx; f.y *= ky; }
+      this.cam.x *= kx;
+      this.cam.y *= ky;
+    } else if (oldVw <= 1) {
+      this.snapCamera();
     }
   }
+
+  /* ================= 相机 ================= */
+
+  /* 把任意差值折回 [-size/2, size/2)，用于环形世界的最短路径计算与渲染定位 */
+  wrapDelta(d, size) {
+    return d - Math.round(d / size) * size;
+  }
+
+  /* 环形世界下的两点实际距离（跨边缘时取更近的那一侧） */
+  ringDist(ax, ay, bx, by) {
+    const dx = this.wrapDelta(bx - ax, this.worldW);
+    const dy = this.wrapDelta(by - ay, this.worldH);
+    return Math.hypot(dx, dy);
+  }
+
+  /* 相机目标：玩家居中，并按移动方向做前瞻偏移，让前方水域多露出来一些。
+     世界是环形的，所以相机不做边界钳制——越钳制越会在穿越处产生跳变。 */
+  cameraTarget() {
+    const p = this.player;
+    if (!p) return { x: 0, y: 0 };
+    const ahead = Math.min(this.vw, this.vh) * 0.22 * p.speedRatio;
+    return {
+      x: p.x + Math.cos(p.angle) * ahead - this.vw * 0.5,
+      y: p.y + Math.sin(p.angle) * ahead - this.vh * 0.5,
+    };
+  }
+
+  /* 立即对齐相机（开局、尺寸变化时用，避免插值造成长距离平移） */
+  snapCamera() {
+    const t = this.cameraTarget();
+    this.cam.x = t.x;
+    this.cam.y = t.y;
+  }
+
+  updateCamera(dt) {
+    const t = this.cameraTarget();
+    const k = Utils.damp(6.5, dt);
+    // 走最短路径：玩家绕过边缘时相机跟着跨过去，而不是倒着横穿整张地图
+    this.cam.x += this.wrapDelta(t.x - this.cam.x, this.worldW) * k;
+    this.cam.y += this.wrapDelta(t.y - this.cam.y, this.worldH) * k;
+  }
+
+  /* 世界坐标 → 屏幕坐标（环形折叠，只返回视野内最近的那一份） */
+  toScreenX(x) { return this.wrapDelta(x - this.cam.x, this.worldW); }
+  toScreenY(y) { return this.wrapDelta(y - this.cam.y, this.worldH); }
 
   reset() {
     this.enemies = [];
     this.particles = [];
     this.floaters = [];
     this.powerups = [];
+    // 输入状态必须清空：菜单待机会留下 pointer.active 与旧的世界坐标，
+    // 不清掉的话开局鱼会自己朝那个陈旧目标游过去。
+    this.pointer.active = false;
+    this.pointer.mode = 'pointer';
+    this.keys.clear();
+    this.drag.active = false;
+    this.drag.dx = 0;
+    this.drag.dy = 0;
+    this.stick.active = false;
+    this.stick.nx = 0;
+    this.stick.ny = 0;
+    this.stick.mag = 0;
     this.elapsed = 0;
     this.shake = 0;
     this.threatLevel = 0;
@@ -115,8 +194,8 @@ class BigFatFish {
     this._lastStage = 0;
 
     this.player = {
-      x: this.vw * 0.5,
-      y: this.vh * 0.5,
+      x: this.worldW * 0.5,
+      y: this.worldH * 0.5,
       vx: 0,
       vy: 0,
       r: BigFatFish.START_R,
@@ -137,8 +216,12 @@ class BigFatFish {
       alive: true,
     };
 
-    const initial = this.state === 'menu' ? 14 : 15;
+    // 世界放大到 9 屏后，只刷十几条鱼会显得整片海是空的。
+    // 开局先铺满目标密度的 7 成，其余交给 updateSpawns 逐步补足（约 10 秒填满），
+    // 既避免开局空旷，也不会一次性生成上百条拖慢首帧。
+    const initial = Math.max(15, Math.round(this.enemyTargetCount() * 0.7));
     for (let i = 0; i < initial; i++) this.spawnEnemy(true);
+    this.snapCamera();
   }
 
   start() {
@@ -221,10 +304,10 @@ class BigFatFish {
     let y;
     let tries = 0;
     do {
-      x = Utils.rand(r, Math.max(r + 1, this.vw - r));
-      y = Utils.rand(r, Math.max(r + 1, this.vh - r));
+      x = Utils.rand(r, Math.max(r + 1, this.worldW - r));
+      y = Utils.rand(r, Math.max(r + 1, this.worldH - r));
       tries++;
-    } while (p && tries < 24 && Utils.dist(x, y, p.x, p.y) < 190);
+    } while (p && tries < 24 && this.ringDist(x, y, p.x, p.y) < 190);
 
     const coolHue = Utils.rand(150, 315);
     const e = {
@@ -251,51 +334,72 @@ class BigFatFish {
     if (anywhere) {
       e.alpha = 1;
       e.fadeIn = false;
+      // 开局：大部分鱼刷在玩家附近，避免大地图一开始满眼空旷
+      if (p && Math.random() < 0.6) {
+        this.placeNearPlayer(e, 190, 520);
+      }
     } else if (forceEdible && p && Math.random() < 0.55) {
       // 补充猎物时优先出现在玩家附近的可视范围内
-      const ang = Utils.rand(0, Utils.TAU);
-      const dist = Utils.rand(190, 420);
-      e.x = Utils.clamp(p.x + Math.cos(ang) * dist, r + 8, Math.max(r + 9, this.vw - r - 8));
-      e.y = Utils.clamp(p.y + Math.sin(ang) * dist, r + 8, Math.max(r + 9, this.vh - r - 8));
+      this.placeNearPlayer(e, 190, 420);
     } else {
-      // 从屏幕边缘外围游入
+      // 从当前视野边缘外围游入（相对相机，不是相对世界边界）
       const edge = Utils.randInt(0, 3);
-      if (edge === 0) { e.x = -r * 1.4; e.y = Utils.rand(0, this.vh); }
-      else if (edge === 1) { e.x = this.vw + r * 1.4; e.y = Utils.rand(0, this.vh); }
-      else if (edge === 2) { e.x = Utils.rand(0, this.vw); e.y = -r * 1.4; }
-      else { e.x = Utils.rand(0, this.vw); e.y = this.vh + r * 1.4; }
+      const cx = this.cam.x;
+      const cy = this.cam.y;
+      if (edge === 0) { e.x = cx - r * 1.4; e.y = Utils.rand(cy, cy + this.vh); }
+      else if (edge === 1) { e.x = cx + this.vw + r * 1.4; e.y = Utils.rand(cy, cy + this.vh); }
+      else if (edge === 2) { e.x = Utils.rand(cx, cx + this.vw); e.y = cy - r * 1.4; }
+      else { e.x = Utils.rand(cx, cx + this.vw); e.y = cy + this.vh + r * 1.4; }
+      this.wrapPos(e);
     }
     this.enemies.push(e);
     return e;
   }
 
+  /* 把实体放到玩家周围一段距离内，并保证落在世界范围内（环形世界，用取模而非钳制） */
+  placeNearPlayer(e, minD, maxD) {
+    const p = this.player;
+    const ang = Utils.rand(0, Utils.TAU);
+    const dist = Utils.rand(minD, maxD);
+    e.x = p.x + Math.cos(ang) * dist;
+    e.y = p.y + Math.sin(ang) * dist;
+    this.wrapPos(e);
+  }
+
+  /* 只把坐标折回世界范围，不处理相机（用于生成阶段的坐标归位） */
+  wrapPos(e) {
+    const m = e.r + 6;
+    if (e.x < -m) e.x += this.worldW + m * 2;
+    else if (e.x > this.worldW + m) e.x -= this.worldW + m * 2;
+    if (e.y < -m) e.y += this.worldH + m * 2;
+    else if (e.y > this.worldH + m) e.y -= this.worldH + m * 2;
+  }
+
   enemyTargetCount() {
-    return 14 + Math.min(10, Math.floor(this.elapsed / 22));
+    // 世界放大到 9 屏，鱼的数量也要跟上，否则大地图会空得离谱
+    const base = 14 + Math.min(10, Math.floor(this.elapsed / 22));
+    return Math.min(96, Math.round(base * 4.5));
   }
 
   spawnPowerup() {
-    if (this.powerups.length >= 2) return;
+    if (this.powerups.length >= 3) return;
     const kinds = ['glow', 'magnet', 'shield'];
     const kind = Utils.pick(kinds);
-    const m = 54;
-    let x = this.vw * 0.5;
-    let y = this.vh * 0.5;
     const p = this.player;
-    // 避开玩家视野中心，避免与玩家鱼叠在一起造成误读
+    // 大地图里道具必须刷在玩家附近，否则永远遇不到
     for (let i = 0; i < 18; i++) {
-      x = Utils.rand(m, Math.max(m + 1, this.vw - m));
-      y = Utils.rand(m, Math.max(m + 1, this.vh - m));
-      if (!p || Utils.dist(x, y, p.x, p.y) > 130) break;
+      const ang = Utils.rand(0, Utils.TAU);
+      const dist = Utils.rand(160, Math.min(this.vw, this.vh) * 0.85);
+      const x = p.x + Math.cos(ang) * dist;
+      const y = p.y + Math.sin(ang) * dist;
+      const u = { kind, x, y, r: 13, life: 13, maxLife: 13, phase: Utils.rand(0, Utils.TAU), born: 0 };
+      this.wrapPos(u);
+      if (this.ringDist(u.x, u.y, p.x, p.y) > 130) {
+        this.powerups.push(u);
+        return u;
+      }
     }
-    this.powerups.push({
-      kind,
-      x, y,
-      r: 13,
-      life: 13,
-      maxLife: 13,
-      phase: Utils.rand(0, Utils.TAU),
-      born: 0,
-    });
+    return null;
   }
 
   /* ================= 特效 ================= */
@@ -347,8 +451,9 @@ class BigFatFish {
   /* ================= 输入 ================= */
 
   setPointer(x, y) {
-    this.pointer.x = x / this.S;
-    this.pointer.y = y / this.S;
+    // 传入的是画布局部坐标（逻辑像素），转成世界坐标
+    this.pointer.x = x / this.S + this.cam.x;
+    this.pointer.y = y / this.S + this.cam.y;
     this.pointer.active = true;
     this.pointer.mode = 'pointer';
   }
@@ -375,6 +480,34 @@ class BigFatFish {
     this.drag.dx = 0;
     this.drag.dy = 0;
     if (this.state !== 'playing') this.pointer.mode = 'pointer';
+  }
+
+  /* 摇杆输入：dx/dy 是相对底盘中心的位移（像素），radius 是底盘半径。
+     死区 15%，超出半径按满力处理。 */
+  setStick(dx, dy, radius) {
+    const dist = Math.hypot(dx, dy);
+    const dead = radius * 0.15;
+    if (dist <= dead) {
+      this.stick.active = false;
+      this.stick.nx = 0;
+      this.stick.ny = 0;
+      this.stick.mag = 0;
+      return;
+    }
+    const mag = Math.min(1, dist / radius);
+    this.stick.active = true;
+    this.stick.nx = dx / dist;
+    this.stick.ny = dy / dist;
+    this.stick.mag = mag;
+    this.pointer.mode = 'stick';
+  }
+
+  releaseStick() {
+    this.stick.active = false;
+    this.stick.nx = 0;
+    this.stick.ny = 0;
+    this.stick.mag = 0;
+    if (this.pointer.mode === 'stick') this.pointer.mode = 'pointer';
   }
 
   setKey(code, down) {
@@ -412,6 +545,7 @@ class BigFatFish {
 
     if (running) this.updateSpawns(dt);
 
+    this.updateCamera(dt);
     this.shake = Math.max(0, this.shake - dt * 26);
   }
 
@@ -423,15 +557,19 @@ class BigFatFish {
     let ny = 0;
 
     if (this.state === 'menu') {
-      // 待机演示：沿李萨如曲线巡游
+      // 待机演示：沿李萨如曲线巡游（围绕世界中心，让相机也跟着动起来）
       const tt = this.t * 0.34;
       this.pointer.active = true;
-      this.pointer.x = this.vw * 0.5 + Math.cos(tt) * this.vw * 0.24;
-      this.pointer.y = this.vh * 0.54 + Math.sin(tt * 1.27) * this.vh * 0.17;
+      this.pointer.x = this.worldW * 0.5 + Math.cos(tt) * this.vw * 0.34;
+      this.pointer.y = this.worldH * 0.5 + Math.sin(tt * 1.27) * this.vh * 0.28;
       this.pointer.mode = 'pointer';
     }
 
-    if (this.pointer.mode === 'keys' && this.keys.size) {
+    if (this.pointer.mode === 'stick' && this.stick.active) {
+      // 摇杆：方向 × 力度，推得越远游得越快
+      nx = this.stick.nx * this.stick.mag;
+      ny = this.stick.ny * this.stick.mag;
+    } else if (this.pointer.mode === 'keys' && this.keys.size) {
       let kx = 0;
       let ky = 0;
       if (this.keys.has('ArrowLeft') || this.keys.has('KeyA')) kx -= 1;
@@ -507,11 +645,14 @@ class BigFatFish {
   }
 
   wrap(e) {
+    // 环形世界：越界即从对面穿回。相机用最短路径跟随，因此这里无需动相机。
     const m = e.r + 6;
-    if (e.x < -m) e.x = this.vw + m;
-    else if (e.x > this.vw + m) e.x = -m;
-    if (e.y < -m) e.y = this.vh + m;
-    else if (e.y > this.vh + m) e.y = -m;
+    const W = this.worldW + m * 2;
+    const H = this.worldH + m * 2;
+    if (e.x < -m) e.x += W;
+    else if (e.x > this.worldW + m) e.x -= W;
+    if (e.y < -m) e.y += H;
+    else if (e.y > this.worldH + m) e.y -= H;
   }
 
   updateEnemies(dt, running) {
@@ -545,8 +686,9 @@ class BigFatFish {
       let ay = 0;
 
       if (p && p.alive) {
-        const dx = p.x - e.x;
-        const dy = p.y - e.y;
+        // 环形世界：走最短路径，否则鱼会绕整张地图追玩家
+        const dx = this.wrapDelta(p.x - e.x, this.worldW);
+        const dy = this.wrapDelta(p.y - e.y, this.worldH);
         const d = Math.hypot(dx, dy) || 1;
 
         if (e.threat < 0.6) {
@@ -687,7 +829,10 @@ class BigFatFish {
     // 吃掉 / 被撞
     for (const e of this.enemies) {
       if (e.dead || e.alpha < 0.4) continue;
-      const d = Utils.dist(p.x, p.y, e.x, e.y);
+      // 环形世界：跨越边缘的相邻实体也算碰到，取最短路径距离
+      const ddx = this.wrapDelta(e.x - p.x, this.worldW);
+      const ddy = this.wrapDelta(e.y - p.y, this.worldH);
+      const d = Math.hypot(ddx, ddy);
       const touch = d < p.r * 0.95 + e.r * 0.62;
       if (!touch) continue;
 
@@ -709,7 +854,9 @@ class BigFatFish {
     // 拾取强化
     for (const u of this.powerups) {
       if (u.dead) continue;
-      if (Utils.dist(p.x, p.y, u.x, u.y) < p.r + u.r + 4) {
+      const udx = this.wrapDelta(u.x - p.x, this.worldW);
+      const udy = this.wrapDelta(u.y - p.y, this.worldH);
+      if (Math.hypot(udx, udy) < p.r + u.r + 4) {
         this.collect(u);
       }
     }
@@ -763,9 +910,11 @@ class BigFatFish {
 
   bounce(e) {
     const p = this.player;
-    const d = Utils.dist(p.x, p.y, e.x, e.y) || 1;
-    const kx = (p.x - e.x) / d;
-    const ky = (p.y - e.y) / d;
+    const dx = this.wrapDelta(p.x - e.x, this.worldW);
+    const dy = this.wrapDelta(p.y - e.y, this.worldH);
+    const d = Math.hypot(dx, dy) || 1;
+    const kx = dx / d;
+    const ky = dy / d;
     p.vx = kx * 210;
     p.vy = ky * 210;
     e.vx = -kx * 150;
@@ -783,9 +932,11 @@ class BigFatFish {
     p.dashTime = 0;
 
     // 被撞退
-    const d = Utils.dist(p.x, p.y, e.x, e.y) || 1;
-    const kx = (p.x - e.x) / d;
-    const ky = (p.y - e.y) / d;
+    const hdx = this.wrapDelta(p.x - e.x, this.worldW);
+    const hdy = this.wrapDelta(p.y - e.y, this.worldH);
+    const d = Math.hypot(hdx, hdy) || 1;
+    const kx = hdx / d;
+    const ky = hdy / d;
     p.vx = kx * 390;
     p.vy = ky * 390;
 
@@ -840,17 +991,29 @@ class BigFatFish {
       g.translate(Utils.rand(-this.shake, this.shake) * 0.5, Utils.rand(-this.shake, this.shake) * 0.5);
     }
 
+    // 环境层：光柱与浮游微粒固定在屏幕上，不随相机滚动，避免世界看起来是空的
     this.rays.draw(g, this.vw, this.vh, this.t);
     this.motes.draw(g, this.vw, this.vh);
-    Render.drawSeafloor(g, this.vw, this.vh, this.t, depth, 0);
 
+    // 海底轮廓画在世界底部：只有游到世界下半部分才看得见，制造纵深
+    const floorOffset = (this.worldH - this.vh) - this.cam.y;
+    if (floorOffset > -this.vh && floorOffset < this.vh * 2) {
+      Render.drawSeafloor(g, this.vw, this.vh, this.t, depth, floorOffset);
+    }
+
+    // 世界层：实体按环形折叠到视野内最近的一份再绘制
     this.drawPowerups(g);
     this.drawEnemies(g);
     this.drawTrail(g);
     if (this.player && this.player.alive) this.drawPlayer(g);
     this.drawParticles(g);
 
-    for (const f of this.floaters) Render.drawFloater(g, f);
+    for (const f of this.floaters) {
+      const sx = this.toScreenX(f.x);
+      const sy = this.toScreenY(f.y);
+      if (sx + 80 < 0 || sx - 80 > this.vw || sy + 40 < 0 || sy - 40 > this.vh) continue;
+      Render.drawFloater(g, { x: sx, y: sy, text: f.text, color: f.color, size: f.size, life: f.life, maxLife: f.maxLife });
+    }
 
     this.drawTouchHint(g);
 
@@ -873,10 +1036,25 @@ class BigFatFish {
     // 只按直径分档排序，避免每帧做完整比较排序的额外开销
     const list = this.enemies;
     list.sort((a, b) => a.r - b.r);
+    const scratch = this._fishScratch || (this._fishScratch = {});
     for (let i = 0; i < list.length; i++) {
       const e = list[i];
       if (e.alpha <= 0.02) continue;
-      Render.drawFish(g, e, this.t, {
+      // 视口裁剪：屏幕外的鱼不参与绘制
+      const sx = this.toScreenX(e.x);
+      const sy = this.toScreenY(e.y);
+      if (sx + e.r < 0 || sx - e.r > this.vw || sy + e.r < 0 || sy - e.r > this.vh) continue;
+      scratch.x = sx;
+      scratch.y = sy;
+      scratch.r = e.r;
+      scratch.angle = e.angle;
+      scratch.dirRight = e.dirRight;
+      scratch.bulge = e.bulge;
+      scratch.phase = e.phase;
+      scratch.wobSpeed = e.wobSpeed;
+      scratch.speedRatio = e.speedRatio;
+      scratch.tailSwing = e.tailSwing;
+      Render.drawFish(g, scratch, this.t, {
         alpha: Utils.clamp(e.alpha, 0, 1),
         hue: e.hue,
         danger: e.threat > 0.72,
@@ -890,7 +1068,10 @@ class BigFatFish {
     for (const p of this.particles) {
       if (p.kind !== 'trail') continue;
       const a = Utils.clamp(p.life / p.maxLife, 0, 1);
-      Render.drawGlow(g, p.x, p.y, p.r * 2.6, p.hue, a * 0.5);
+      const sx = this.toScreenX(p.x);
+      const sy = this.toScreenY(p.y);
+      if (sx + p.r * 3 < 0 || sx - p.r * 3 > this.vw || sy + p.r * 3 < 0 || sy - p.r * 3 > this.vh) continue;
+      Render.drawGlow(g, sx, sy, p.r * 2.6, p.hue, a * 0.5);
     }
     g.globalAlpha = 1;
   }
@@ -901,6 +1082,12 @@ class BigFatFish {
     if (p.invincible > 0) {
       alpha = 0.42 + Math.abs(Math.sin(this.t * 22)) * 0.58;
     }
+
+    // 世界坐标 → 屏幕坐标：整体平移后，下面的绘制仍按玩家自身坐标书写
+    const sx = this.toScreenX(p.x);
+    const sy = this.toScreenY(p.y);
+    g.save();
+    g.translate(sx - p.x, sy - p.y);
 
     // 玩家专属标识：一圈缓慢旋转的虚线光环，与敌鱼彻底区分
     g.save();
@@ -961,24 +1148,28 @@ class BigFatFish {
       tailSwing: p.tailSwing,
     }, this.t, { alpha, mouth: p.mouth, eyeScale: 1.05, hue: p.hue });
     g.globalAlpha = 1;
+    g.restore();
   }
 
   drawParticles(g) {
     for (const p of this.particles) {
       const a = Utils.clamp(p.life / p.maxLife, 0, 1);
       if (p.kind === 'trail') continue;
+      const sx = this.toScreenX(p.x);
+      const sy = this.toScreenY(p.y);
+      if (sx + p.r * 2 < 0 || sx - p.r * 2 > this.vw || sy + p.r * 2 < 0 || sy - p.r * 2 > this.vh) continue;
       if (p.kind === 'bubble') {
         g.globalAlpha = a * 0.8;
         g.strokeStyle = `hsla(${p.hue}, 100%, 84%, 0.95)`;
         g.lineWidth = Math.max(0.7, p.r * 0.35);
         g.beginPath();
-        g.arc(p.x, p.y, p.r, 0, Utils.TAU);
+        g.arc(sx, sy, p.r, 0, Utils.TAU);
         g.stroke();
       } else {
         g.globalAlpha = a;
         g.fillStyle = `hsla(${p.hue}, 100%, 80%, 0.95)`;
         g.beginPath();
-        g.arc(p.x, p.y, p.r * 0.6, 0, Utils.TAU);
+        g.arc(sx, sy, p.r * 0.6, 0, Utils.TAU);
         g.fill();
       }
     }
@@ -990,8 +1181,9 @@ class BigFatFish {
       const t = this.t;
       const bob = Math.sin(t * 2.2 + u.phase) * 3;
       const fade = u.life < 2.5 ? 0.35 + Math.abs(Math.sin(t * 8)) * 0.65 : 1;
-      const x = u.x;
-      const y = u.y + bob;
+      const x = this.toScreenX(u.x);
+      const y = this.toScreenY(u.y) + bob;
+      if (x + u.r * 4 < 0 || x - u.r * 4 > this.vw || y + u.r * 4 < 0 || y - u.r * 4 > this.vh) continue;
       const pulse = 1 + Math.sin(t * 3.4 + u.phase) * 0.08;
       const tint = u.kind === 'glow' ? 178 : u.kind === 'magnet' ? 212 : 44;
 
@@ -1073,14 +1265,18 @@ class BigFatFish {
     g.globalAlpha = 1;
   }
 
-  /* 触摸拖拽的视觉反馈：原点小圈 + 方向指示 */
+  /* 触摸拖拽的视觉反馈：原点小圈 + 方向指示。
+     drag.ox/oy/dx/dy 都是画布 CSS 像素，而绘制上下文已按 dpr*S 缩放，
+     所以必须先除以 S 换回逻辑坐标，否则提示圈会偏移到错误位置。 */
   drawTouchHint(g) {
     if (!this.drag.active || this.state !== 'playing') return;
-    const x = this.drag.ox;
-    const y = this.drag.oy;
-    const { dx, dy } = this.drag;
+    const x = this.drag.ox / this.S;
+    const y = this.drag.oy / this.S;
+    const dx = this.drag.dx / this.S;
+    const dy = this.drag.dy / this.S;
     const d = Math.hypot(dx, dy);
-    const maxR = 72 * this.S;
+    // 拖满全速的距离是 72*S 个 CSS 像素，即 72 个逻辑像素
+    const maxR = 72;
 
     g.save();
     g.globalAlpha = 0.42;

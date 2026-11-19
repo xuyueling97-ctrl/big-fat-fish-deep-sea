@@ -12,6 +12,8 @@
     combo: document.getElementById('comboTag'),
     powers: document.getElementById('powerTags'),
     dashBtn: document.getElementById('dashBtn'),
+    stick: document.getElementById('stick'),
+    stickKnob: document.getElementById('stickKnob'),
     screens: {
       start: document.getElementById('screenStart'),
       pause: document.getElementById('screenPause'),
@@ -49,6 +51,8 @@
     const hideHud = name === 'start' || name === 'over';
     dom.hud.classList.toggle('is-hidden', hideHud);
     dom.dashBtn.classList.toggle('is-hidden', hideHud);
+    // 摇杆只在真正游玩时出现，菜单/结算页不占视野
+    if (dom.stick) dom.stick.classList.toggle('is-hidden', hideHud);
   }
 
   game.onState = (s) => {
@@ -73,6 +77,7 @@
   function startGame() {
     Sfx.unlock();
     Sfx.start();
+    tryLockLandscape();
     game.start();
   }
 
@@ -146,11 +151,24 @@
 
   /* ---------- 指针 ----------
      鼠标：绝对定位（指哪游哪，PC 原有手感不变）
-     触摸：相对拖拽（手指不遮鱼身，单手可玩） */
+     触摸：相对拖拽（手指不遮鱼身，单手可玩）
+     竖屏手机：舞台整体旋转 90°，坐标需反解 */
   let dragging = false;
+
+  /* 舞台是否处于旋转状态（竖屏触屏强制横屏） */
+  function isStageRotated() {
+    return document.body.classList.contains('is-rotated');
+  }
 
   function pointerPos(e) {
     const rect = canvas.getBoundingClientRect();
+    if (isStageRotated()) {
+      // 顺时针旋转 90° 后：屏幕 x 轴对应画布的 y 轴，屏幕 y 轴对应画布的 -x 轴
+      return {
+        x: e.clientY - rect.top,
+        y: rect.width - (e.clientX - rect.left),
+      };
+    }
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
@@ -192,6 +210,77 @@
     Sfx.unlock();
     game.dash();
   });
+
+  /* ---------- 摇杆 ----------
+     固定位置摇杆：按住底盘内任意点即可推动，摇杆头跟随手指但限制在底盘内。
+     事件全部 stopPropagation，避免顺带触发画布上的相对拖拽。 */
+  const stickEl = dom.stick;
+  const knobEl = dom.stickKnob;
+  let stickPointerId = null;
+  let stickRadius = 1;
+
+  function stickCenter() {
+    const r = stickEl.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, radius: r.width / 2 };
+  }
+
+  function updateStick(e) {
+    const c = stickCenter();
+    stickRadius = c.radius || 1;
+    let dx = e.clientX - c.x;
+    let dy = e.clientY - c.y;
+    // 舞台顺时针旋转 90° 后：屏幕向下 = 画布向右，屏幕向右 = 画布向上。
+    // 摇杆头也是旋转体，所以视觉位移同样要换算到画布局部坐标。
+    if (isStageRotated()) {
+      const rx = dy;
+      const ry = -dx;
+      dx = rx;
+      dy = ry;
+    }
+    game.setStick(dx, dy, stickRadius);
+
+    // 摇杆头视觉位移：限制在底盘内
+    const d = Math.hypot(dx, dy);
+    const max = stickRadius - 20;
+    const k = d > max ? max / d : 1;
+    if (knobEl) knobEl.style.transform = `translate(${dx * k}px, ${dy * k}px)`;
+  }
+
+  function resetStickVisual() {
+    game.releaseStick();
+    if (knobEl) knobEl.style.transform = '';
+    stickEl.classList.remove('is-active');
+    stickPointerId = null;
+  }
+
+  if (stickEl) {
+    stickEl.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      Sfx.unlock();
+      if (!game.isTouch) confirmTouch();
+      stickPointerId = e.pointerId;
+      stickEl.setPointerCapture?.(e.pointerId);
+      stickEl.classList.add('is-active');
+      updateStick(e);
+    });
+
+    stickEl.addEventListener('pointermove', (e) => {
+      if (stickPointerId !== e.pointerId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      updateStick(e);
+    });
+
+    const endStick = (e) => {
+      if (stickPointerId !== null && e.pointerId !== stickPointerId) return;
+      e.stopPropagation();
+      resetStickVisual();
+    };
+    stickEl.addEventListener('pointerup', endStick);
+    stickEl.addEventListener('pointercancel', endStick);
+    stickEl.addEventListener('lostpointercapture', endStick);
+  }
 
   /* ---------- HUD ---------- */
   const HEART_COUNT = 3;
@@ -252,6 +341,7 @@
 
   /* ---------- 尺寸 ---------- */
   function onResize() {
+    syncOrientation();
     game.resize();
   }
   window.addEventListener('resize', onResize);
@@ -353,9 +443,34 @@
   function noteTouchInput() {
     touchObserved = true;
     enableTouchUI();
+    syncOrientation();
+  }
+
+  /* ---------- 强制横屏 ----------
+     手机竖持时把整个舞台顺时针旋转 90°，玩家看到的仍是横屏画面。
+     Android 上再尝试锁方向；iOS Safari 不支持锁定，靠 CSS 旋转兜底。 */
+  const stage = document.getElementById('app');
+
+  function syncOrientation() {
+    if (!stage) return;
+    const portrait = window.innerHeight > window.innerWidth;
+    const rotate = game.isTouch && portrait;
+    document.body.classList.toggle('is-rotated', rotate);
+
+    // 旋转后画布的布局尺寸由 CSS 决定（宽高互换），必须让游戏重算
+    requestAnimationFrame(() => game.resize());
+  }
+
+  function tryLockLandscape() {
+    try {
+      if (screen.orientation && typeof screen.orientation.lock === 'function') {
+        screen.orientation.lock('landscape').catch(() => { /* 桌面/iOS 会拒绝，忽略 */ });
+      }
+    } catch (e) { /* 忽略 */ }
   }
 
   confirmTouch();
+  syncOrientation();
 
   window.addEventListener('touchstart', noteTouchInput, { passive: true });
   window.addEventListener('pointerdown', (e) => {
@@ -387,25 +502,25 @@
         let threat = null;
         let td = Infinity;
         for (const e of game.enemies) {
-          const d = Utils.dist(e.x, e.y, p.x, p.y);
+          const d = game.ringDist(e.x, e.y, p.x, p.y);
           if (e.r <= p.r * 1.08) {
             if (d < pd) { pd = d; prey = e; }
           } else if (e.r >= p.r * 1.18 && d < 170) {
             if (d < td) { td = d; threat = e; }
           }
         }
-        let tx = game.vw * 0.5;
-        let ty = game.vh * 0.5;
+        let tx = p.x;
+        let ty = p.y;
         if (threat) {
-          tx = p.x + (p.x - threat.x) * 1.6;
-          ty = p.y + (p.y - threat.y) * 1.6;
+          // 沿最短路径的反方向躲开
+          tx = p.x - game.wrapDelta(threat.x - p.x, game.worldW) * 1.6;
+          ty = p.y - game.wrapDelta(threat.y - p.y, game.worldH) * 1.6;
         } else if (prey) {
-          tx = prey.x;
-          ty = prey.y;
+          tx = p.x + game.wrapDelta(prey.x - p.x, game.worldW);
+          ty = p.y + game.wrapDelta(prey.y - p.y, game.worldH);
         }
-        tx = Utils.clamp(tx, 20, game.vw - 20);
-        ty = Utils.clamp(ty, 20, game.vh - 20);
-        game.setPointer(tx * game.S, ty * game.S);
+        // 目标点需要转成屏幕坐标再交给 setPointer
+        game.setPointer(game.toScreenX(tx) * game.S, game.toScreenY(ty) * game.S);
         game.update(1 / 60);
       }
       return this.snapshot();

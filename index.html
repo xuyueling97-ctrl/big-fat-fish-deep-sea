@@ -52,6 +52,14 @@
 
   <button class="dash-btn is-hidden" id="dashBtn" aria-label="冲刺">冲刺</button>
 
+  <!-- 左下角摇杆：只在触屏显示，方向由摇杆输出，冲刺仍归右下按钮 -->
+  <div class="stick is-hidden" id="stick" aria-label="方向摇杆">
+    <div class="stick__base">
+      <span class="stick__ring"></span>
+      <span class="stick__knob" id="stickKnob"></span>
+    </div>
+  </div>
+
   <div class="screen" id="screenStart">
     <div class="panel">
       <h1 class="title">大肥鱼</h1>
