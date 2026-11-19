@@ -166,6 +166,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   report.state0 = await cdp.evaluate('window.__game && window.__game.state');
   report.canvasSize = await cdp.evaluate('(() => { const c = document.getElementById("game"); return c.width + "x" + c.height; })()');
 
+  // 彩蛋：开始界面连点标题 7 下 -> 秘密提示出现 + 游戏标记解锁
+  report.eggBefore = await cdp.evaluate(`(() => ({
+    secretHidden: document.getElementById('eggSecret').classList.contains('is-hidden'),
+    unlocked: window.__game.eggUnlocked,
+    goldenBeforeUnlock: window.__game.enemies.filter(e => e.golden).length,
+  }))()`);
+  report.eggAfter = await cdp.evaluate(`(() => {
+    const t = document.querySelector('#screenStart .title');
+    for (let i = 0; i < 7; i++) {
+      t.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }));
+    }
+    let stored = null;
+    try { stored = localStorage.getItem('bigfatfish.egg'); } catch (e) { stored = 'err'; }
+    return {
+      secretHidden: document.getElementById('eggSecret').classList.contains('is-hidden'),
+      unlocked: window.__game.eggUnlocked,
+      stored,
+    };
+  })()`);
+
   await cdp.send('Emulation.setDeviceMetricsOverride', {
     width: 1280, height: 720, deviceScaleFactor: 1, mobile: false,
   });
@@ -177,6 +197,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   report.stateAfterStart = await cdp.evaluate('window.__game.state');
   report.enemies = await cdp.evaluate('window.__fishTest.enemyCount()');
   report.r0 = await cdp.evaluate('window.__fishTest.playerR()');
+
+  // 彩蛋解锁后，每局开局应有一条金鳞锦鲤；吃掉它要额外 +500 分
+  report.eggInRun = await cdp.evaluate(`(() => {
+    const g = window.__game;
+    const koi = g.enemies.find(e => e.golden);
+    if (!koi) return { spawned: false };
+    const before = g.score;
+    koi.x = g.player.x;
+    koi.y = g.player.y;
+    g.checkCollisions();
+    return {
+      spawned: true,
+      gained: g.score - before,
+      eaten: !!koi.dead,
+      floaterText: (g.floaters[g.floaters.length - 1] || {}).text || '',
+    };
+  })()`);
 
   const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
   fs.writeFileSync(path.join(OUT, 'start.png'), Buffer.from(shot.data, 'base64'));

@@ -55,6 +55,8 @@ class BigFatFish {
     // 摇杆：nx/ny 为归一化方向，mag 为力度 0..1
     this.stick = { active: false, nx: 0, ny: 0, mag: 0 };
     this.isTouch = false;
+    // 彩蛋开关由 main.js 写入（开始界面连点标题解锁），只影响每局开局的一条锦鲤
+    this.eggUnlocked = false;
 
     this.best = this.loadBest();
     this.onHud = null;
@@ -221,7 +223,40 @@ class BigFatFish {
     // 既避免开局空旷，也不会一次性生成上百条拖慢首帧。
     const initial = Math.max(15, Math.round(this.enemyTargetCount() * 0.7));
     for (let i = 0; i < initial; i++) this.spawnEnemy(true);
+    // 彩蛋：解锁后每局开场白送一条金鳞锦鲤（吃掉给一笔额外分数）
+    if (this.eggUnlocked) this.spawnGoldenKoi();
     this.snapCamera();
+  }
+
+  /* 金鳞锦鲤：不参与普通刷怪，也不受"太小的鱼淡出"规则影响 */
+  spawnGoldenKoi() {
+    const p = this.player;
+    const e = {
+      x: p.x,
+      y: p.y,
+      vx: 0, vy: 0,
+      r: BigFatFish.START_R * 0.62,
+      baseHue: 45,
+      hue: 45,
+      threat: 0,
+      angle: Utils.rand(0, Utils.TAU),
+      dirRight: true,
+      bulge: 1.16,
+      phase: Utils.rand(0, Utils.TAU),
+      wobSpeed: Utils.rand(4, 6),
+      wander: Utils.rand(0, Utils.TAU),
+      speed: 78,
+      speedRatio: 0,
+      age: 0,
+      alpha: 1,
+      fadeIn: false,
+      mouth: 0,
+      tailSwing: 0,
+      golden: true,
+    };
+    this.placeNearPlayer(e, 200, 320);
+    this.enemies.push(e);
+    return e;
   }
 
   start() {
@@ -755,8 +790,8 @@ class BigFatFish {
 
       this.wrap(e);
 
-      // 太小的鱼失去意义，让它淡出
-      if (running && p && e.age > 4 && e.r < p.r * 0.26 && this.enemies.length > 12) {
+      // 太小的鱼失去意义，让它淡出（彩蛋锦鲤例外，它要留到被吃掉）
+      if (running && p && !e.golden && e.age > 4 && e.r < p.r * 0.26 && this.enemies.length > 12) {
         e.alpha -= dt * 1.2;
         if (e.alpha < 0) e.dead = true;
       }
@@ -881,7 +916,9 @@ class BigFatFish {
 
     const ratio = Utils.clamp(e.r / p.r, 0.05, 2.6);
     const base = Math.round(4 + 26 * ratio);
-    const gain = Math.round(base * mult * (revenge ? 1.5 : 1));
+    let gain = Math.round(base * mult * (revenge ? 1.5 : 1));
+    // 彩蛋锦鲤：额外一笔固定奖励，并配一段专属音效
+    if (e.golden) gain += 500;
     this.score += gain;
 
     // 成长：体型越大收益越小，保证一局有足够长的成长曲线
@@ -895,15 +932,20 @@ class BigFatFish {
     p.eatPulse = 1;
     this.shake = Math.max(this.shake, Math.min(6, e.r * 0.12));
 
-    const hue = revenge ? 6 : 168;
-    this.burst(e.x, e.y, Math.round(5 + e.r * 0.5), hue, 0.9);
+    const hue = revenge ? 6 : e.golden ? 45 : 168;
+    this.burst(e.x, e.y, Math.round(6 + e.r * 0.5), hue, e.golden ? 1.6 : 0.9);
 
-    const label = this.combo > 1 ? `+${gain} ×${this.combo}` : `+${gain}`;
-    const color = revenge ? '#ffb0b8' : this.combo > 2 ? '#ffd76e' : '#b9f7e8';
-    this.floater(e.x, e.y - e.r - 6, label, color, this.combo > 4 ? 18 : 15);
+    const label = e.golden
+      ? `金鳞锦鲤 +${gain}`
+      : this.combo > 1 ? `+${gain} ×${this.combo}` : `+${gain}`;
+    const color = e.golden ? '#ffd76e' : revenge ? '#ffb0b8' : this.combo > 2 ? '#ffd76e' : '#b9f7e8';
+    this.floater(e.x, e.y - e.r - 6, label, color, e.golden || this.combo > 4 ? 18 : 15);
 
-    Sfx.eat(e.r);
-    if (this.combo > 1) Sfx.combo(this.combo);
+    if (e.golden) Sfx.secret();
+    else {
+      Sfx.eat(e.r);
+      if (this.combo > 1) Sfx.combo(this.combo);
+    }
 
     if (this.stageIndex() !== this._lastStage) {
       const idx = this.stageIndex();
@@ -1062,6 +1104,11 @@ class BigFatFish {
       scratch.wobSpeed = e.wobSpeed;
       scratch.speedRatio = e.speedRatio;
       scratch.tailSwing = e.tailSwing;
+      // 金鳞锦鲤自带一圈金色光晕，远远就能认出来
+      if (e.golden) {
+        Render.drawGlow(g, sx, sy, e.r * 4.4, 45,
+          Utils.clamp(e.alpha, 0, 1) * (0.7 + Math.sin(this.t * 3.2) * 0.18), 'lighter');
+      }
       Render.drawFish(g, scratch, this.t, {
         alpha: Utils.clamp(e.alpha, 0, 1),
         hue: e.hue,

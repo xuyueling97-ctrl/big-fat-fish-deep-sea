@@ -150,6 +150,15 @@ const Sfx = (() => {
     warning() {
       tone({ type: 'square', freq: 150, dur: 0.12, gain: 0.1 });
     },
+    // 彩蛋：一串上扬的碎光琶音
+    secret() {
+      const notes = [523, 659, 784, 1046, 1318, 1568];
+      notes.forEach((f, i) => {
+        tone({ type: 'triangle', freq: f, dur: 0.22, gain: 0.15, delay: i * 0.075 });
+        tone({ type: 'sine', freq: f * 2, dur: 0.18, gain: 0.06, delay: i * 0.075 });
+      });
+      noise({ dur: 0.5, gain: 0.07, filter: 5200, type: 'bandpass', delay: 0.42 });
+    },
   };
 
   api.load();

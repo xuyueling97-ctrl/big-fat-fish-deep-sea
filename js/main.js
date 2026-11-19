@@ -32,6 +32,8 @@
     finalSize: document.getElementById('finalSize'),
     finalEats: document.getElementById('finalEats'),
     newRecord: document.getElementById('newRecord'),
+    eggSecret: document.getElementById('eggSecret'),
+    eggTitle: document.querySelector('#screenStart .title'),
     errorBanner: document.getElementById('errorBanner'),
   };
 
@@ -39,6 +41,55 @@
   window.__game = game; // 便于自动化测试
 
   let lastHud = 0;
+
+  /* ---------- 彩蛋：连点标题 7 下 ----------
+     触屏与鼠标都用 pointerdown，所以在手机和桌面都能触发。
+     解锁后本局起每局开局多一条「金鳞锦鲤」，并记住到 localStorage。 */
+  const EGG_KEY = 'bigfatfish.egg';
+  const EGG_TAPS = 7;
+  const EGG_WINDOW = 2400; // 毫秒内连点才算
+  let eggTaps = 0;
+  let eggLastTap = 0;
+
+  function applyEggUnlocked(on) {
+    game.eggUnlocked = on;
+    if (dom.eggSecret) dom.eggSecret.classList.toggle('is-hidden', !on);
+  }
+
+  function loadEgg() {
+    try {
+      return localStorage.getItem(EGG_KEY) === '1';
+    } catch (e) { return false; }
+  }
+
+  function persistEgg() {
+    try { localStorage.setItem(EGG_KEY, '1'); } catch (e) { /* 忽略 */ }
+  }
+
+  function unlockEgg() {
+    if (game.eggUnlocked) return;
+    applyEggUnlocked(true);
+    persistEgg();
+    Sfx.unlock();
+    Sfx.secret();
+  }
+
+  applyEggUnlocked(loadEgg());
+
+  if (dom.eggTitle) {
+    dom.eggTitle.addEventListener('pointerdown', () => {
+      // 只在开始界面计数，进入游戏后点画布不算。
+      // 不拦截冒泡：真实的触摸/鼠标事件仍需流到全局的触屏检测逻辑。
+      if (game.state !== 'menu') return;
+      const now = performance.now();
+      eggTaps = now - eggLastTap > EGG_WINDOW ? 1 : eggTaps + 1;
+      eggLastTap = now;
+      if (eggTaps >= EGG_TAPS) {
+        eggTaps = 0;
+        unlockEgg();
+      }
+    });
+  }
 
   /* ---------- 界面切换 ---------- */
   function showScreen(name) {
