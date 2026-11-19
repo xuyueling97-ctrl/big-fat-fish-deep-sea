@@ -101,23 +101,31 @@ class CDP {
       const autopilotStep = () => {
         const p = g.player;
         if (!p || !p.alive) return;
-        // 真实的玩家只会躲"真正致命"的鱼，其余时间都在吃
+        // 真实的玩家只会躲"真正致命"的鱼，其余时间都在吃。
+        // 世界是环形的，距离必须走最短路径，否则跨边界时会把近处的鱼当成很远。
         let prey = null, pd = Infinity;
         let threat = null, td = Infinity;
         for (const e of g.enemies) {
-          const d = Math.hypot(e.x - p.x, e.y - p.y);
+          const d = g.ringDist(e.x, e.y, p.x, p.y);
           if (e.r <= p.r * 1.08) { if (d < pd) { pd = d; prey = e; } }
           else if (e.r >= p.r * 1.18 && d < 165) { if (d < td) { td = d; threat = e; } }
         }
-        let tx, ty;
+        let tx = p.x, ty = p.y;
         if (threat) {
-          tx = p.x + (p.x - threat.x) * 1.6;
-          ty = p.y + (p.y - threat.y) * 1.6;
-        } else if (prey) { tx = prey.x; ty = prey.y; }
-        else { tx = g.vw * 0.5; ty = g.vh * 0.5; }
-        const cx = Math.max(20, Math.min(g.vw - 20, tx));
-        const cy = Math.max(20, Math.min(g.vh - 20, ty));
-        g.setPointer(cx * g.S, cy * g.S);
+          // 沿最短路径的反方向躲开
+          tx = p.x - g.wrapDelta(threat.x - p.x, g.worldW) * 1.6;
+          ty = p.y - g.wrapDelta(threat.y - p.y, g.worldH) * 1.6;
+        } else if (prey) {
+          tx = p.x + g.wrapDelta(prey.x - p.x, g.worldW);
+          ty = p.y + g.wrapDelta(prey.y - p.y, g.worldH);
+        } else {
+          tx = g.worldW * 0.5;
+          ty = g.worldH * 0.5;
+        }
+        // setPointer 收的是画布局部坐标，先投影到屏幕再换算
+        const sx = g.toScreenX(tx);
+        const sy = g.toScreenY(ty);
+        g.setPointer(sx * g.S, sy * g.S);
       };
 
       for (let step = 0; step < 60 * 180; step++) {

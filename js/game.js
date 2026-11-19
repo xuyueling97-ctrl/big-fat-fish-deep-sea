@@ -298,7 +298,10 @@ class BigFatFish {
     }
 
     let r = Utils.clamp(baseR * frac, 5, BigFatFish.MAX_R * 1.75);
-    const diff = this.enemyTargetCount();
+    // 困难度用时间推导，不能用 enemyTargetCount()。
+    // 后者在改成大地图后返回的是"鱼的数量"（63~96），拿它当困难度会把鱼速放大到 3.8 倍，
+    // 导致掠食者比玩家还快，一局撑不过 40 秒。
+    const diff = this.difficultyIndex();
 
     let x;
     let y;
@@ -375,10 +378,15 @@ class BigFatFish {
     else if (e.y > this.worldH + m) e.y -= this.worldH + m * 2;
   }
 
+  /* 困难度索引：只随游戏时长增长（14 → 24），与鱼的数量无关。
+     鱼速、鱼群规模都要基于这个值推导，不要再各自读取别的量。 */
+  difficultyIndex() {
+    return 14 + Math.min(10, Math.floor(this.elapsed / 22));
+  }
+
   enemyTargetCount() {
     // 世界放大到 9 屏，鱼的数量也要跟上，否则大地图会空得离谱
-    const base = 14 + Math.min(10, Math.floor(this.elapsed / 22));
-    return Math.min(96, Math.round(base * 4.5));
+    return Math.min(96, Math.round(this.difficultyIndex() * 4.5));
   }
 
   spawnPowerup() {
