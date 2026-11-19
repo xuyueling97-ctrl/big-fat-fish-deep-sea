@@ -206,7 +206,9 @@ async function touchEnd(cdp, at) {
     mode: window.__game.pointer.mode,
     dx: Math.round(window.__game.drag.dx),
     dy: Math.round(window.__game.drag.dy),
+    vx: Math.round(window.__game.player.vx),
     vy: Math.round(window.__game.player.vy),
+    rotated: document.body.classList.contains('is-rotated'),
   })`);
   await touchEnd(cdp, { x: 195, y: 420 });
   await sleep(300);
@@ -217,13 +219,22 @@ async function touchEnd(cdp, at) {
   })`);
 
   report.touch = {
+    beforeX: Math.round(before.x),
+    duringX: Math.round(during.x),
     beforeY: Math.round(before.y),
     duringY: Math.round(during.y),
-    movedUp: during.y < before.y - 5,
+    // 竖屏触屏现在会被强制旋转成横屏，屏幕「向上滑」映射到画布 -x 而不是 -y，
+    // 所以断言要按舞台是否旋转来选轴，否则会误判为「没动」。
+    rotated: during.rotated,
+    movedUp: during.rotated
+      ? during.x < before.x - 5
+      : during.y < before.y - 5,
     dragActiveDuringTouch: during.dragActive,
     dragMode: during.mode,
+    dragDx: during.dx,
     dragDy: during.dy,
-    negativeVy: during.vy < 0,
+    // 旋转态下屏幕向上 = 画布向左，所以 vx 为负
+    velocityInDirection: during.rotated ? during.vx < 0 : during.vy < 0,
     dragReleasedAfterEnd: after.dragActive === false,
     stateStillPlaying: await cdp.evaluate('window.__game.state'),
   };
@@ -266,12 +277,94 @@ async function touchEnd(cdp, at) {
   const landscapeState = await cdp.evaluate('window.__game.state');
   const playerInView = await cdp.evaluate(`(() => {
     const g = window.__game;
-    return g.player.x > 0 && g.player.x < g.vw && g.player.y > 0 && g.player.y < g.vh;
+    // 世界比视口大，玩家位置要用相机投影后判断是否在视野内
+    const sx = g.toScreenX(g.player.x);
+    const sy = g.toScreenY(g.player.y);
+    return sx > -60 && sx < g.vw + 60 && sy > -60 && sy < g.vh + 60;
   })()`);
+  const landscapeWorld = await cdp.evaluate(`({
+    ratioW: +(window.__game.worldW / window.__game.vw).toFixed(2),
+    ratioH: +(window.__game.worldH / window.__game.vh).toFixed(2),
+  })`);
   report.orientation = {
     portraitLogical, landscapeLogical,
     portraitState, landscapeState,
     playerInViewAfterRotate: playerInView,
+    worldScreens: landscapeWorld,
+  };
+
+  // ---- 竖屏强制横屏：舞台旋转 + 摇杆命中 ----
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 3, mobile: true });
+  await sleep(600);
+  await cdp.evaluate('window.__fishTest.start()');
+  await sleep(400);
+  const rotateInfo = await cdp.evaluate(`(() => {
+    const g = window.__game;
+    const sr = document.getElementById('stick').getBoundingClientRect();
+    const mr = document.querySelector('.meter').getBoundingClientRect();
+    return {
+      isRotated: document.body.classList.contains('is-rotated'),
+      logical: Math.round(g.vw) + 'x' + Math.round(g.vh),
+      stickVisible: getComputedStyle(document.getElementById('stick')).display !== 'none',
+      stickW: Math.round(sr.width),
+      stickInViewport: sr.left >= -1 && sr.top >= -1 && sr.right <= innerWidth + 1 && sr.bottom <= innerHeight + 1,
+      overlapsMeter: !(sr.right <= mr.left || sr.left >= mr.right || sr.bottom <= mr.top || sr.top >= mr.bottom),
+      knob: { x: sr.left + sr.width / 2, y: sr.top + sr.height / 2, radius: sr.width / 2 },
+    };
+  })()`);
+  // 旋转态下向下推摇杆，应映射到画布 +x
+  await touchDrag(cdp, { x: rotateInfo.knob.x, y: rotateInfo.knob.y },
+    { x: rotateInfo.knob.x, y: rotateInfo.knob.y + rotateInfo.knob.radius * 0.85 }, 8);
+  await sleep(400);
+  const rotatedStick = await cdp.evaluate(`({
+    mode: window.__game.pointer.mode,
+    nx: +window.__game.stick.nx.toFixed(2),
+    ny: +window.__game.stick.ny.toFixed(2),
+  })`);
+  await touchEnd(cdp, { x: rotateInfo.knob.x, y: rotateInfo.knob.y + rotateInfo.knob.radius * 0.85 });
+  report.rotateStick = {
+    isRotated: rotateInfo.isRotated,
+    logical: rotateInfo.logical,
+    stickVisible: rotateInfo.stickVisible,
+    stickW: rotateInfo.stickW,
+    stickInViewport: rotateInfo.stickInViewport,
+    overlapsMeter: rotateInfo.overlapsMeter,
+    mode: rotatedStick.mode,
+    nx: rotatedStick.nx, ny: rotatedStick.ny,
+    // 屏幕向下 = 画布向右
+    mappedToCanvasX: rotatedStick.nx > 0.9 && Math.abs(rotatedStick.ny) < 0.2,
+  };
+  await sleep(200);
+
+  // ---- 横屏摇杆操控测试 ----
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 844, height: 390, deviceScaleFactor: 3, mobile: true });
+  await sleep(500);
+  await cdp.evaluate('window.__fishTest.start()');
+  await sleep(400);
+  const knob = await cdp.evaluate(`(() => {
+    const r = document.getElementById('stick').getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, radius: r.width / 2 };
+  })()`);
+  const sBefore = await cdp.evaluate('window.__game.player.x');
+  await touchDrag(cdp, { x: knob.x, y: knob.y }, { x: knob.x + knob.radius * 0.85, y: knob.y }, 8);
+  await sleep(500);
+  const sDuring = await cdp.evaluate(`({
+    x: window.__game.player.x,
+    mode: window.__game.pointer.mode,
+    mag: +window.__game.stick.mag.toFixed(2),
+    dragActive: window.__game.drag.active,
+    knobMoved: document.getElementById('stickKnob').style.transform.includes('translate'),
+  })`);
+  await touchEnd(cdp, { x: knob.x + knob.radius * 0.85, y: knob.y });
+  await sleep(200);
+  const sAfter = await cdp.evaluate('window.__game.stick.active');
+  report.stick = {
+    movedRight: sDuring.x > sBefore + 5,
+    mode: sDuring.mode,
+    mag: sDuring.mag,
+    draggingNotTriggered: sDuring.dragActive === false,
+    knobMoved: sDuring.knobMoved,
+    releasedAfterEnd: sAfter === false,
   };
 
   // ---- 后台自动暂停 ----
