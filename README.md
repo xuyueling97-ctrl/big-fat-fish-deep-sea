@@ -176,6 +176,7 @@ https://xuyueling97-ctrl.github.io/big-fat-fish-deep-sea/
 - **无素材**：所有鱼、粒子、光效都由代码绘制，音效由 WebAudio 实时合成，仓库里没有一张图片资源或一个音频文件
 - **性能**：发光效果预渲染成贴图复用，避免每帧新建径向渐变。实测真实负载 **0.46 ms/帧**，627 粒子 + 60 条鱼的极端场景 **1.77 ms/帧**（60 fps 预算为 16.7 ms）
 - **自适应**：以短边为基准缩放世界坐标，桌面、平板、手机横竖屏下鱼的大小比例一致
+- **环形世界**：地图首尾相接，所有距离/方向计算统一用 `wrapDelta()` 取最短路径；折返周期在全工程统一为 `worldW`/`worldH`（不再带实体半径余量），相机始终折回玩家所在的世界带，因此穿越边缘时画面与鼠标操控都不会错位
 - **无头验证**：通过 Chrome DevTools Protocol 驱动 Edge，自动捕获控制台异常、截图、模拟触摸与游玩
 
 ---
@@ -185,7 +186,7 @@ https://xuyueling97-ctrl.github.io/big-fat-fish-deep-sea/
 需要 **Node 18+**（用到全局 `WebSocket`）和 **Microsoft Edge**（脚本里写死了默认安装路径 `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`，其他浏览器需自行改路径）。测试脚本会自行启动无头浏览器、起临时静态服务，无需手动准备。
 
 ```powershell
-node tests/world-math.js  # 世界/相机数学自检 + 大后期围攻压力回归（纯 Node，最快）
+node tests/world-math.js  # 世界/相机数学自检 + 边界接缝回归 + 大后期围攻压力回归（纯 Node，最快）
 node tests/smoke.js       # 冒烟：全链路 + PC/触屏 UI 分支是否正确
 node tests/late-pressure.js # 大后期围攻压力 A/B（满级 + 6000 分，各跑 5 轮）
 node tests/mobile.js      # 移动端：6 设备视口 + 真实触摸拖拽 + 横竖屏 + 后台暂停

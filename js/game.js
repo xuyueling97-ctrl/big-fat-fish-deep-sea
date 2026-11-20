@@ -178,6 +178,13 @@ class BigFatFish {
     // 走最短路径：玩家绕过边缘时相机跟着跨过去，而不是倒着横穿整张地图
     this.cam.x += this.wrapDelta(t.x - this.cam.x, this.worldW) * k;
     this.cam.y += this.wrapDelta(t.y - this.cam.y, this.worldH) * k;
+    // 把相机折回玩家所在的世界带。相机插值只会收敛到「相差整张地图」的等价解，
+    // 不归一化的话 cam 会一直停在另一个世界带里，setPointer 的世界坐标反算就会差一整圈。
+    const p = this.player;
+    if (p) {
+      this.cam.x = p.x + this.wrapDelta(this.cam.x - p.x, this.worldW);
+      this.cam.y = p.y + this.wrapDelta(this.cam.y - p.y, this.worldH);
+    }
   }
 
   /* 世界坐标 → 屏幕坐标（环形折叠，只返回视野内最近的那一份） */
@@ -444,11 +451,10 @@ class BigFatFish {
 
   /* 只把坐标折回世界范围，不处理相机（用于生成阶段的坐标归位） */
   wrapPos(e) {
-    const m = e.r + 6;
-    if (e.x < -m) e.x += this.worldW + m * 2;
-    else if (e.x > this.worldW + m) e.x -= this.worldW + m * 2;
-    if (e.y < -m) e.y += this.worldH + m * 2;
-    else if (e.y > this.worldH + m) e.y -= this.worldH + m * 2;
+    // 必须与 wrapDelta/toScreen 用同一个周期（worldW），否则实体的「逻辑位置」
+    // 和渲染时的「屏幕位置」会按不同周期折叠，穿越边界时凭空多跳 2m 像素。
+    e.x -= Math.floor(e.x / this.worldW) * this.worldW;
+    e.y -= Math.floor(e.y / this.worldH) * this.worldH;
   }
 
   /* 困难度索引：只随游戏时长增长（14 → 24），与鱼的数量无关。
@@ -532,9 +538,18 @@ class BigFatFish {
   /* ================= 输入 ================= */
 
   setPointer(x, y) {
-    // 传入的是画布局部坐标（逻辑像素），转成世界坐标
-    this.pointer.x = x / this.S + this.cam.x;
-    this.pointer.y = y / this.S + this.cam.y;
+    // 传入的是画布局部坐标（逻辑像素），转成世界坐标。
+    // 相机可能与玩家相差整张地图（环形世界的等价解），所以按最短路径相对玩家折算，
+    // 否则鼠标放在鱼身上时反算出的目标点会差一整圈，鱼会朝固定方向一直游。
+    let wx = x / this.S + this.cam.x;
+    let wy = y / this.S + this.cam.y;
+    const p = this.player;
+    if (p) {
+      wx = p.x + this.wrapDelta(wx - p.x, this.worldW);
+      wy = p.y + this.wrapDelta(wy - p.y, this.worldH);
+    }
+    this.pointer.x = wx;
+    this.pointer.y = wy;
     this.pointer.active = true;
     this.pointer.mode = 'pointer';
   }
@@ -729,13 +744,10 @@ class BigFatFish {
 
   wrap(e) {
     // 环形世界：越界即从对面穿回。相机用最短路径跟随，因此这里无需动相机。
-    const m = e.r + 6;
-    const W = this.worldW + m * 2;
-    const H = this.worldH + m * 2;
-    if (e.x < -m) e.x += W;
-    else if (e.x > this.worldW + m) e.x -= W;
-    if (e.y < -m) e.y += H;
-    else if (e.y > this.worldH + m) e.y -= H;
+    // 周期必须与 wrapDelta/toScreen 一致（worldW），不能带上 e.r 的余量：
+    // 一旦周期不同，实体每次穿越都会在屏幕上多跳 2*(r+6) 像素。
+    e.x -= Math.floor(e.x / this.worldW) * this.worldW;
+    e.y -= Math.floor(e.y / this.worldH) * this.worldH;
   }
 
   /* 挑出可以全速追击的掠食者：只取离玩家最近的几条（见 MAX_CHASERS）。
