@@ -367,6 +367,89 @@ async function touchEnd(cdp, at) {
     releasedAfterEnd: sAfter === false,
   };
 
+  // ---- 点触屏控件不能黑屏一闪 ----
+  // 根因：给 canvas.width 赋值（哪怕同值）会清空位图。主循环的 frame() 在上一帧末尾
+  // 就重新注册了自己，rAF 批次里总排第一；点摇杆/冲刺按钮会经 touchstart →
+  // noteTouchInput → syncOrientation → rAF(resize)，resize 排在同一帧的 draw 之后，
+  // 于是清空后当帧不再重绘，合成出一帧全黑。
+  // 断言：点这两个控件时，画布不能被清成空白。
+  await cdp.evaluate('window.__fishTest.start()');
+  await sleep(400);
+  report.noBlackFlash = await cdp.evaluate(`(async () => {
+    const g = window.__game;
+    const rawRaf = window.requestAnimationFrame.bind(window);
+    let pending = [];
+    let scheduled = false;
+    let lumaSamples = [];
+
+    function luma() {
+      const c = g.canvas, ctx = g.g;
+      if (!(c.width > 8 && c.height > 8)) return null;
+      let sum = 0, n = 0;
+      for (let fx = 1; fx <= 6; fx++) {
+        for (let fy = 1; fy <= 6; fy++) {
+          const d = ctx.getImageData(Math.round(c.width * fx / 7), Math.round(c.height * fy / 7), 1, 1).data;
+          sum += (d[0] + d[1] + d[2]) / 3; n++;
+        }
+      }
+      return sum / n;
+    }
+
+    function drive(ts) {
+      scheduled = false;
+      const batch = pending;
+      pending = [];
+      for (const cb of batch) { try { cb(ts); } catch (e) {} }
+      // 批次结束 = 浏览器即将合成，此刻读到的就是真正上屏的内容
+      const v = luma();
+      if (v !== null) lumaSamples.push(+v.toFixed(1));
+      if (pending.length && !scheduled) { scheduled = true; rawRaf(drive); }
+    }
+    window.requestAnimationFrame = function (cb) {
+      pending.push(cb);
+      if (!scheduled) { scheduled = true; rawRaf(drive); }
+      return pending.length;
+    };
+
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const results = {};
+
+    for (const sel of ['#stick', '#dashBtn']) {
+      lumaSamples = [];
+      const el = document.querySelector(sel);
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      el.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 1, pointerType: 'touch', clientX: x, clientY: y,
+      }));
+      try {
+        const t = new Touch({ identifier: 1, target: el, clientX: x, clientY: y });
+        el.dispatchEvent(new TouchEvent('touchstart', {
+          bubbles: true, cancelable: true, touches: [t], targetTouches: [t], changedTouches: [t],
+        }));
+      } catch (e) { /* Touch 构造不支持时忽略 */ }
+      await wait(700);
+      el.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true, cancelable: true, pointerId: 1, pointerType: 'touch',
+      }));
+      await wait(200);
+
+      const valid = lumaSamples.filter((v) => v >= 0);
+      results[sel] = {
+        frames: valid.length,
+        minLuma: valid.length ? Math.min(...valid) : null,
+        blackFrames: valid.filter((v) => v < 6).length,
+      };
+    }
+
+    window.requestAnimationFrame = rawRaf;
+    return {
+      stick: results['#stick'],
+      dashBtn: results['#dashBtn'],
+      noBlackFrame: results['#stick'].blackFrames === 0 && results['#dashBtn'].blackFrames === 0,
+    };
+  })()`);
+
   // ---- 后台自动暂停 ----
   await cdp.evaluate('window.__fishTest.start()');
   await sleep(300);

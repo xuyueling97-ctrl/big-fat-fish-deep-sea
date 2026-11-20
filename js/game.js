@@ -105,17 +105,34 @@ class BigFatFish {
     const w = Math.max(1, Math.round(layoutW || rect.width || window.innerWidth));
     const h = Math.max(1, Math.round(layoutH || rect.height || window.innerHeight));
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const oldVw = this.vw;
-    const oldVh = this.vh;
+    const nextW = Math.round(w * dpr);
+    const nextH = Math.round(h * dpr);
+
+    // 给 canvas.width/height 赋值（哪怕赋的是同一个数）会清空整个位图。
+    // 主循环 frame() 在上一帧末尾就重新注册了自己，rAF 批次里总排在最前；
+    // 事件回调里注册的 resize 排在它后面，于是同一帧内变成「先 draw 再清空」，
+    // 合成出去就是一帧全黑 —— 这就是点摇杆/冲刺按钮时「黑屏一瞬间」。
+    // 所以尺寸没变时绝不能碰 canvas.width/height。
+    const bitmapChanged = this.canvas.width !== nextW || this.canvas.height !== nextH;
 
     this.w = w;
     this.h = h;
     this.dpr = dpr;
-    this.canvas.width = Math.round(w * dpr);
-    this.canvas.height = Math.round(h * dpr);
+
+    const oldS = this.S;
+    const oldVw = this.vw;
+    const S = Utils.clamp(Math.min(w, h) / 620, 0.5, 1.8);
+
+    // 布局与缩放都没变化：位图不用重建，世界也不用迁移，直接返回
+    if (!bitmapChanged && S === oldS) return;
+
+    if (bitmapChanged) {
+      this.canvas.width = nextW;
+      this.canvas.height = nextH;
+    }
 
     // 以短边为基准缩放，保证不同屏幕下鱼的大小比例一致
-    this.S = Utils.clamp(Math.min(w, h) / 620, 0.5, 1.8);
+    this.S = S;
     this.vw = w / this.S;
     this.vh = h / this.S;
 
