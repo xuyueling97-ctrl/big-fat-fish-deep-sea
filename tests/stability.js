@@ -105,11 +105,16 @@ class CDP {
     await cdp.evaluate('window.__fishTest.autopilot(240)');
     const info = await cdp.evaluate(`(() => {
       const g = window.__game;
+      // 玩家坐标是世界坐标，必须先用 toScreenX/Y 投影到视口再判断，
+      // 直接拿 player.x 和 vw 比是量纲错误（worldW = 3 x vw，出生点恒 > vw）
+      const psx = g.toScreenX(g.player.x);
+      const psy = g.toScreenY(g.player.y);
       return {
         canvas: g.canvas.width + 'x' + g.canvas.height,
         logical: Math.round(g.vw) + 'x' + Math.round(g.vh),
         scale: +g.S.toFixed(2),
-        playerOnScreen: g.player.x > 0 && g.player.x < g.vw && g.player.y > 0 && g.player.y < g.vh,
+        playerOnScreen: psx > 0 && psx < g.vw && psy > 0 && psy < g.vh,
+        playerScreen: Math.round(psx) + ',' + Math.round(psy),
         hudInViewport: (() => {
           const r = document.getElementById('hud').getBoundingClientRect();
           return r.width > 0 && r.height > 0 && r.right <= window.innerWidth + 1;
